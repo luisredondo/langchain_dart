@@ -1,4 +1,4 @@
-import 'package:googleai_dart/googleai_dart.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:http/http.dart' as http;
 import 'package:langchain/langchain.dart';
 import 'package:uuid/uuid.dart';
@@ -141,24 +141,30 @@ class ChatGoogleGenerativeAI
   /// - `client`: the HTTP client to use. You can set your own HTTP client if
   ///   you need further customization (e.g. to use a Socks5 proxy).
   ChatGoogleGenerativeAI({
-    final String? apiKey,
-    final String? baseUrl,
-    final Map<String, String>? headers,
-    final Map<String, dynamic>? queryParams,
+    required final String apiKey,
     final http.Client? client,
     this.defaultOptions = const ChatGoogleGenerativeAIOptions(
       model: 'gemini-pro',
     ),
-  }) : _client = GoogleAIClient(
+  }) : _client = GenerativeModel(
           apiKey: apiKey,
-          baseUrl: baseUrl,
-          headers: headers,
-          queryParams: queryParams,
-          client: client,
+          model: defaultOptions.model ?? 'gemini-pro',
+          safetySettings: defaultOptions
+            .safetySettings
+            ?.toSafetySettings() ?? [],
+          generationConfig: GenerationConfig(
+            topP: defaultOptions.topP,
+            topK: defaultOptions.topK,
+            candidateCount: defaultOptions.candidateCount,
+            maxOutputTokens: defaultOptions.maxOutputTokens,
+            temperature: defaultOptions.temperature,
+            stopSequences: defaultOptions.stopSequences ?? [],
+          ),
+          httpClient: client,
         );
 
   /// A client for interacting with Google AI API.
-  final GoogleAIClient _client;
+  final GenerativeModel _client;
 
   /// The default options to use when calling the chat completions API.
   ChatGoogleGenerativeAIOptions defaultOptions;
@@ -177,12 +183,22 @@ class ChatGoogleGenerativeAI
     final id = _uuid.v4();
     final model =
         options?.model ?? defaultOptions.model ?? throwNullModelError();
+
     final completion = await _client.generateContent(
-      modelId: model,
-      request: _generateCompletionRequest(
-        input.toChatMessages(),
-        options: options,
+      input.toChatMessages().toContentList(),
+      generationConfig: GenerationConfig(
+        topP: options?.topP ?? defaultOptions.topP,
+        topK: options?.topK ?? defaultOptions.topK, 
+        candidateCount:
+            options?.candidateCount ?? defaultOptions.candidateCount,
+        maxOutputTokens:
+            options?.maxOutputTokens ?? defaultOptions.maxOutputTokens,
+        temperature: options?.temperature ?? defaultOptions.temperature,
+        stopSequences: options?.stopSequences 
+          ?? defaultOptions.stopSequences ?? [],
       ),
+      safetySettings: (options?.safetySettings ?? defaultOptions.safetySettings)
+          ?.toSafetySettings(),
     );
     return completion.toChatResult(id, model);
   }
@@ -205,28 +221,6 @@ class ChatGoogleGenerativeAI
     });
   }
 
-  /// Creates a [GenerateContentRequest] from the given input.
-  GenerateContentRequest _generateCompletionRequest(
-    final List<ChatMessage> messages, {
-    final ChatGoogleGenerativeAIOptions? options,
-  }) {
-    return GenerateContentRequest(
-      contents: messages.toContentList(),
-      generationConfig: GenerationConfig(
-        topP: options?.topP ?? defaultOptions.topP,
-        topK: options?.topK ?? defaultOptions.topK,
-        candidateCount:
-            options?.candidateCount ?? defaultOptions.candidateCount,
-        maxOutputTokens:
-            options?.maxOutputTokens ?? defaultOptions.maxOutputTokens,
-        temperature: options?.temperature ?? defaultOptions.temperature,
-        stopSequences: options?.stopSequences ?? defaultOptions.stopSequences,
-      ),
-      safetySettings: (options?.safetySettings ?? defaultOptions.safetySettings)
-          ?.toSafetySettings(),
-    );
-  }
-
   @override
   Future<List<int>> tokenize(
     final PromptValue promptValue, {
@@ -243,16 +237,13 @@ class ChatGoogleGenerativeAI
     final ChatGoogleGenerativeAIOptions? options,
   }) async {
     final tokens = await _client.countTokens(
-      modelId: options?.model ?? defaultOptions.model ?? throwNullModelError(),
-      request: CountTokensRequest(
-        contents: promptValue.toChatMessages().toContentList(),
-      ),
+      promptValue.toChatMessages().toContentList(),
     );
-    return tokens.totalTokens ?? 0;
+    return tokens.totalTokens;
   }
 
   /// Closes the client and cleans up any resources associated with it.
   void close() {
-    _client.endSession();
+    // _client.endSession();
   }
 }

@@ -1,5 +1,7 @@
+import 'dart:convert';
+
 import 'package:collection/collection.dart';
-import 'package:googleai_dart/googleai_dart.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:langchain/langchain.dart';
 
 import 'models.dart';
@@ -18,19 +20,19 @@ extension ChatMessagesMapper on List<ChatMessage> {
             'Attach your system message in the human message.',
           ),
         final HumanChatMessage msg => Content(
-            role: _authorUser,
-            parts: _mapHumanChatMessageContentParts(msg.content),
+            _authorUser,
+            _mapHumanChatMessageContentParts(msg.content),
           ),
         final AIChatMessage aiChatMessage => Content(
-            role: _authorAI,
-            parts: [
-              Part(text: aiChatMessage.content),
+            _authorAI,
+            [
+              TextPart(aiChatMessage.content),
             ],
           ),
         final CustomChatMessage customChatMessage => Content(
-            role: customChatMessage.role,
-            parts: [
-              Part(text: customChatMessage.content),
+            customChatMessage.role,
+            [
+              TextPart(customChatMessage.content),
             ],
           ),
         FunctionChatMessage() => throw UnsupportedError(
@@ -44,16 +46,18 @@ extension ChatMessagesMapper on List<ChatMessage> {
     final ChatMessageContent content,
   ) {
     return switch (content) {
-      final ChatMessageContentText c => [Part(text: c.text)],
+      final ChatMessageContentText c => [TextPart(c.text)],
       final ChatMessageContentImage c => [
-          Part(inlineData: Blob(mimeType: c.mimeType, data: c.data)),
-        ],
+        if (c.mimeType != null)
+          DataPart(c.mimeType!, base64.decode(c.data)),
+      ],
       final ChatMessageContentMultiModal c => c.parts
           .map(
             (final p) => switch (p) {
-              final ChatMessageContentText c => Part(text: c.text),
-              final ChatMessageContentImage c => Part(
-                  inlineData: Blob(mimeType: c.mimeType, data: c.data),
+              final ChatMessageContentText c => TextPart(c.text),
+              final ChatMessageContentImage c => DataPart(
+                  c.mimeType!,
+                  base64.decode(c.data),
                 ),
               ChatMessageContentMultiModal() => throw UnsupportedError(
                   'Cannot have multimodal content in multimodal content',
@@ -73,7 +77,8 @@ extension GenerateContentResponseMapper on GenerateContentResponse {
       id: id,
       generations: _mapGenerations(),
       usage: LanguageModelUsage(
-        totalTokens: candidates?.map((final c) => c.tokenCount ?? 0).sum ?? 0,
+        // totalTokens: candidates.map((final c) => c.tokenCount ?? 0).sum ?? 0,
+        // totalTokens: 18,
       ),
       modelOutput: {
         'model': model,
@@ -84,23 +89,22 @@ extension GenerateContentResponseMapper on GenerateContentResponse {
 
   List<ChatGeneration> _mapGenerations() {
     return candidates
-            ?.map(
-              (final candidate) => ChatGeneration(
-                AIChatMessage(
-                  content: candidate.content?.parts
-                          ?.map((final p) => p.text)
-                          .whereNotNull()
-                          .join('\n') ??
-                      '',
-                ),
-                generationInfo: {
-                  'index': candidate.index,
-                  'finish_reason': candidate.finishReason?.name,
-                },
-              ),
-            )
-            .toList(growable: false) ??
-        const [];
+        .map(
+          (final candidate) => ChatGeneration(
+            AIChatMessage(
+              content: candidate.content.parts
+                  .whereType<TextPart>()
+                  .map((final p) => p.text)
+                  .whereNotNull()
+                  .join('\n'),
+            ),
+            generationInfo: {
+              // 'index': candidate.index,
+              'finish_reason': candidate.finishReason?.name,
+            },
+          ),
+        )
+        .toList(growable: false);
   }
 }
 
@@ -110,44 +114,33 @@ extension SafetySettingsMapper on List<ChatGoogleGenerativeAISafetySetting> {
   List<SafetySetting> toSafetySettings() {
     return map(
       (final setting) => SafetySetting(
-        category: switch (setting.category) {
+        switch (setting.category) {
           ChatGoogleGenerativeAISafetySettingCategory.harmCategoryUnspecified =>
-            SafetySettingCategory.harmCategoryUnspecified,
-          ChatGoogleGenerativeAISafetySettingCategory.harmCategoryDerogatory =>
-            SafetySettingCategory.harmCategoryDerogatory,
-          ChatGoogleGenerativeAISafetySettingCategory.harmCategoryToxicity =>
-            SafetySettingCategory.harmCategoryToxicity,
-          ChatGoogleGenerativeAISafetySettingCategory.harmCategoryViolence =>
-            SafetySettingCategory.harmCategoryViolence,
-          ChatGoogleGenerativeAISafetySettingCategory.harmCategorySexual =>
-            SafetySettingCategory.harmCategorySexual,
-          ChatGoogleGenerativeAISafetySettingCategory.harmCategoryMedical =>
-            SafetySettingCategory.harmCategoryMedical,
-          ChatGoogleGenerativeAISafetySettingCategory.harmCategoryDangerous =>
-            SafetySettingCategory.harmCategoryDangerous,
+            HarmCategory.unspecified,
           ChatGoogleGenerativeAISafetySettingCategory.harmCategoryHarassment =>
-            SafetySettingCategory.harmCategoryHarassment,
+            HarmCategory.harassment,
           ChatGoogleGenerativeAISafetySettingCategory.harmCategoryHateSpeech =>
-            SafetySettingCategory.harmCategoryHateSpeech,
+            HarmCategory.hateSpeech,
           ChatGoogleGenerativeAISafetySettingCategory
                 .harmCategorySexuallyExplicit =>
-            SafetySettingCategory.harmCategorySexuallyExplicit,
+            HarmCategory.sexuallyExplicit,
           ChatGoogleGenerativeAISafetySettingCategory
                 .harmCategoryDangerousContent =>
-            SafetySettingCategory.harmCategoryDangerousContent,
+            HarmCategory.dangerousContent,
+          _ => throw UnsupportedError('Unsupported harm category'),
         },
-        threshold: switch (setting.threshold) {
+        switch (setting.threshold) {
           ChatGoogleGenerativeAISafetySettingThreshold
                 .harmBlockThresholdUnspecified =>
-            SafetySettingThreshold.harmBlockThresholdUnspecified,
+            HarmBlockThreshold.unspecified,
           ChatGoogleGenerativeAISafetySettingThreshold.blockLowAndAbove =>
-            SafetySettingThreshold.blockLowAndAbove,
+            HarmBlockThreshold.low,
           ChatGoogleGenerativeAISafetySettingThreshold.blockMediumAndAbove =>
-            SafetySettingThreshold.blockMediumAndAbove,
+            HarmBlockThreshold.medium,
           ChatGoogleGenerativeAISafetySettingThreshold.blockOnlyHigh =>
-            SafetySettingThreshold.blockOnlyHigh,
+            HarmBlockThreshold.high,
           ChatGoogleGenerativeAISafetySettingThreshold.blockNone =>
-            SafetySettingThreshold.blockNone,
+            HarmBlockThreshold.none,
         },
       ),
     ).toList(growable: false);
